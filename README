@@ -1,6 +1,6 @@
-# ratioking
+# RatioKing
 
-**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, configurable via environment variables, containerised in a lightweight multi-stage Alpine Docker image.
+**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage Alpine Docker image.
 
 ---
 
@@ -65,7 +65,7 @@
 
 ## Requirements
 
-* Python 3.12+
+* Python 3.12+
 * `feedparser` (RSS parsing)
 * `requests` (HTTP client)
 * `python-dotenv` (optional, for `.env` loading)
@@ -165,6 +165,7 @@ docker build -t ratioking:v101.0.0 .
 Use the provided `docker-compose.yml`:
 
 ```yaml
+version: "3.8"
 services:
   ratioking:
     image: ratioking:v101.0.0
@@ -173,6 +174,12 @@ services:
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
+    networks:
+      - docker_default
+
+networks:
+  docker_default:
+    external: true
 ```
 
 Launch:
@@ -181,37 +188,34 @@ Launch:
 docker-compose up -d
 ```
 
-The container will read your host’s `.env`, persist logs in `./logs`, and start the downloader on your external `docker_default` network.
-
 ---
 
 ## Logging & State
 
-* **Logs:** both `stdout` (captured by Docker logs) and `LOG_FILE` on disk.
-* **State:** `STATE_FILE` stores JSON:
+* **Logs:** stdout (captured by Docker logs) and file (`LOG_FILE`).
+* **State:** JSON in `STATE_FILE`:
 
   ```json
-  { "last_guid": "<torrent GUID>", "last_dl_ts": 168XYZ }  
+  { "last_guid": "<torrent GUID>", "last_dl_ts": 168XYZ }
   ```
-* These ensure idempotency and cooldown behavior.
 
 ---
 
 ## Customization
 
-* Adjust **`INTERVAL_MINUTES`**, **`FRESH_WINDOW`**, and **`COOLDOWN`** constants in code if you need different timing.
-* Tweak **download parameters** (save path, category, tags, ratio/time limits) via env without code changes.
-* Swap in a different RSS feed by updating `RSS_URL`.
+* Change timing constants in code for different intervals.
+* Tweak download options via `.env` without code changes.
+* Use a different RSS feed by updating `RSS_URL`.
 
 ---
 
 ## Troubleshooting
 
-* **No downloads**: check logs for skipped rules (🆔, ⏱️, ⏳).
-* **API errors**: verify `QB_URL`, `QB_USER`, `QB_PASS` in `.env`, test with `curl`.
-* **Feed parse failures**: run `rss_debug.py` to inspect feed structure.
-* **Docker build failures**: ensure `requirements.txt` matches installed packages.
+* **Skipping too much?** Check logs for which rule is firing (🆔, ⏱️, ⏳).
+* **API errors?** Validate credentials & test `curl` against `QB_URL`.
+* **Feed issues?** Run `rss_debug.py` to inspect feed structure.
+* **Docker build fails?** Ensure `requirements.txt` is up to date.
 
 ---
 
-Happy automated downloading! 📥🚀
+Enjoy your automated downloads! 📥🚀
