@@ -1,118 +1,144 @@
 #!/usr/bin/env python3
+"""ratioking.py – production downloader
+
+Rules (evaluated in this order):
+1. 🆔 **Duplicate check** – skip if newest GUID already processed.
+2. ⏱️ **Freshness** – skip if newest entry is older than 10 min.
+3. ⏳ **Cooldown** – skip if we downloaded in the last 2 h.
+
+If all rules pass, the script downloads the torrent via qBittorrent API and
+updates `state` with the GUID and the download timestamp.
+"""
 import os
-import json
 import sys
+import json
 import time
 import logging
+import calendar
 from pathlib import Path
+from typing import Dict, Any, Optional
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import feedparser
 import requests
 
-# ─── LOAD ENV ──────────────────────────────────────────────
-load_dotenv()  # loads .env from cwd
-
-QB_URL       = os.getenv("QB_URL")
-QB_USER      = os.getenv("QB_USER")
-QB_PASS      = os.getenv("QB_PASS")
+# ─── CONFIG ────────────────────────────────────────────────
+QB_URL       = os.getenv("QB_URL", "http://127.0.0.1:8080")
+QB_USER      = os.getenv("QB_USER", "admin")
+QB_PASS      = os.getenv("QB_PASS", "adminadmin")
 RSS_URL      = os.getenv("RSS_URL")
 STATE_FILE   = os.getenv("STATE_FILE", "./ratioking.state.json")
 INTERVAL_MIN = int(os.getenv("INTERVAL_MINUTES", "15"))
 LOG_FILE     = os.getenv("LOG_FILE", "./ratioking.log")
 
-# ─── VALIDATE CONFIG ───────────────────────────────────────
-if not all([QB_URL, QB_USER, QB_PASS, RSS_URL]):
-    print("❌ Please set QB_URL, QB_USER, QB_PASS and RSS_URL in your .env")
+FRESH_WINDOW = 10 * 60      # 10 min
+COOLDOWN     = 2 * 60 * 60  # 2 h
+
+if not RSS_URL:
+    print("❌ RSS_URL must be set (env or .env).")
     sys.exit(1)
 
-# ─── ENSURE LOG DIRECTORY ──────────────────────────────────
-log_path = Path(LOG_FILE)
-if log_path.parent and not log_path.parent.exists():
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-# ─── SETUP LOGGING ─────────────────────────────────────────
-logger = logging.getLogger()
+# ─── LOGGING ───────────────────────────────────────────────
+Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger("ratioking")
 logger.setLevel(logging.INFO)
+fmt = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
 
-# File handler
-file_handler = logging.FileHandler(LOG_FILE)
-file_handler.setLevel(logging.INFO)
-file_formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
-file_handler.setFormatter(file_formatter)
-logger.addHandler(file_handler)
+fh = logging.FileHandler(LOG_FILE)
+fh.setFormatter(fmt)
+logger.addHandler(fh)
 
-# Stream handler (stdout)
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setLevel(logging.INFO)
-stream_formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
-stream_handler.setFormatter(stream_formatter)
-logger.addHandler(stream_handler)
+sh = logging.StreamHandler(sys.stdout)
+sh.setFormatter(fmt)
+logger.addHandler(sh)
 
-# ─── STATE HANDLING ────────────────────────────────────────
-def load_state(path):
-    if Path(path).is_file():
-        try:
-            return json.loads(Path(path).read_text())
-        except json.JSONDecodeError:
-            pass
-    return {"last_guid": None}
+# ─── STATE ─────────────────────────────────────────────────
+DEFAULT_STATE: Dict[str, Any] = {"last_guid": None, "last_dl_ts": 0}
 
-def save_state(path, state):
+def load_state(path: str) -> Dict[str, Any]:
+    try:
+        data = json.loads(Path(path).read_text())
+        return {**DEFAULT_STATE, **data}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return DEFAULT_STATE.copy()
+
+def save_state(path: str, state: Dict[str, Any]):
     Path(path).write_text(json.dumps(state, indent=2))
 
-# ─── RSS & QBITTORRENT LOGIC ───────────────────────────────
+# ─── HELPERS ───────────────────────────────────────────────
+
+def get_torrent_url(entry) -> Optional[str]:
+    for enc in entry.get("enclosures", []):
+        href = enc.get("href")
+        if href and href.endswith(".torrent"):
+            return href
+    for link in entry.get("links", []):
+        if link.get("type") in ("application/x-bittorrent", "application/octet-stream"):
+            return link.get("href")
+    link = entry.get("link")
+    return link if link and link.endswith(".torrent") else None
+
+
+def get_entry_age_sec(entry) -> Optional[int]:
+    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+    return None if not parsed else int(time.time() - calendar.timegm(parsed))
+
+# ─── CORE ─────────────────────────────────────────────────
+
 def run_once():
     state = load_state(STATE_FILE)
-    last_guid = state.get("last_guid")
+    last_guid = state["last_guid"]
+    last_dl_ts = state["last_dl_ts"]
+    now = int(time.time())
+
+    # Rule-3 ⏳ Cooldown
+    if now - last_dl_ts < COOLDOWN:
+        remaining = (COOLDOWN - (now - last_dl_ts)) // 60
+        logger.info(f"⏳ Cooldown active – {remaining} min left → skip")
+        return
 
     feed = feedparser.parse(RSS_URL)
     if not feed.entries:
-        logger.warning("RSS feed empty or unreachable")
+        logger.warning("⚠️ RSS feed empty or unreachable")
         return
 
-    # Only check the single newest entry
     entry = feed.entries[0]
     guid = entry.get("id") or entry.get("guid") or entry.get("link")
 
+    # Rule-1 🆔 Duplicate check
     if guid == last_guid:
-        logger.info(f"No new torrent since last GUID: {last_guid}")
+        logger.info("🆔 Latest GUID already processed → skip")
         return
 
-    # extract torrent URL
-    def get_torrent_url(e):
-        for enc in e.get("enclosures", []):
-            href = enc.get("href")
-            if href and href.endswith(".torrent"):
-                return href
-        for link in e.get("links", []):
-            if link.get("type") in ("application/x-bittorrent", "application/octet-stream"):
-                return link.get("href")
-        url = e.get("link")
-        if url and url.endswith(".torrent"):
-            return url
-        return None
+    # Rule-2 ⏱️ Freshness
+    age_sec = get_entry_age_sec(entry)
+    if age_sec is None or age_sec > FRESH_WINDOW:
+        logger.info(f"⏱️  Torrent age is {age_sec/60:.1f} min > 10 min → skip")
+        return
 
     torrent_url = get_torrent_url(entry)
     if not torrent_url:
-        logger.error("Could not find a .torrent URL in the latest RSS entry")
+        logger.error("❌ .torrent URL not found → skip")
         return
 
-    logger.info(f"Found new torrent: {entry.get('title', '<no title>')}")
+    # All rules passed – download
+    logger.info("✅ All rules passed – downloading: %s", entry.get("title", "<no title>"))
 
-    # Login to qBittorrent
     session = requests.Session()
     login = session.post(
         f"{QB_URL}/api/v2/auth/login",
         data={"username": QB_USER, "password": QB_PASS},
-        headers={"Referer": QB_URL}
-    )
+        headers={"Referer": QB_URL}, timeout=10)
     if login.status_code != 200 or login.text.strip() != "Ok.":
-        logger.error(f"Login failed ({login.status_code}): {login.text!r}")
+        logger.error("❌ qBittorrent login failed (%s)", login.status_code)
         return
-    logger.info("Authenticated with qBittorrent")
+    logger.info("🔑 Authenticated to qBittorrent")
 
-    # Add torrent
     add = session.post(
         f"{QB_URL}/api/v2/torrents/add",
         data={
@@ -123,22 +149,23 @@ def run_once():
             "ratioLimit": -1,
             "seedingTimeLimit": -1,
         },
-        headers={"Referer": QB_URL}
-    )
+        headers={"Referer": QB_URL}, timeout=20)
 
     if add.status_code == 200:
-        logger.info("Torrent added successfully")
+        logger.info("📥 Torrent added successfully!")
         state["last_guid"] = guid
+        state["last_dl_ts"] = now
         save_state(STATE_FILE, state)
+        logger.info("💾 State saved – cooldown started (2 h)")
     else:
-        logger.error(f"Failed to add torrent ({add.status_code}): {add.text!r}")
+        logger.error("❌ Failed to add torrent (%s)", add.status_code)
 
-# ─── MAIN LOOP ─────────────────────────────────────────────
+# ─── ENTRY POINT ──────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info(f"Starting ratioking: interval {INTERVAL_MIN} min, logging to {LOG_FILE}")
+    logger.info("🚀 Starting ratioking – interval %d min", INTERVAL_MIN)
     while True:
         try:
             run_once()
-        except Exception as e:
-            logger.exception(f"Unexpected error: {e}")
+        except Exception as exc:
+            logger.exception("💥 Unexpected error: %s", exc)
         time.sleep(INTERVAL_MIN * 60)

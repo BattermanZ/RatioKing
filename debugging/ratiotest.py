@@ -1,114 +1,145 @@
 #!/usr/bin/env python3
+"""ratiotest.py – simulation script with three rules
+
+Time handling fix: convert RSS published/updated times to **UTC** using
+`calendar.timegm`, because `feedparser` already normalises the tz offset to
+UTC but `time.mktime` mistakenly treats it as local time. This removes the
+~2‑hour skew you observed.
+"""
 import os
-import json
 import sys
+import json
 import time
 import logging
+import calendar
 from pathlib import Path
+from typing import Dict, Any, Optional
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import feedparser
 
-# ─── LOAD ENV ──────────────────────────────────────────────
-load_dotenv()
-
-QB_URL       = os.getenv("QB_URL")
-QB_USER      = os.getenv("QB_USER")
-QB_PASS      = os.getenv("QB_PASS")
+# ─── CONFIG ────────────────────────────────────────────────
+QB_URL       = os.getenv("QB_URL", "http://127.0.0.1:8080")
 RSS_URL      = os.getenv("RSS_URL")
 STATE_FILE   = os.getenv("STATE_FILE", "./ratiotest.state.json")
 INTERVAL_MIN = int(os.getenv("INTERVAL_MINUTES", "15"))
 LOG_FILE     = os.getenv("LOG_FILE", "./ratiotest.log")
 
-# ─── VALIDATE CONFIG ───────────────────────────────────────
-if not all([QB_URL, QB_USER, QB_PASS, RSS_URL]):
-    print("❌ Please set QB_URL, QB_USER, QB_PASS and RSS_URL in your .env")
+FRESH_WINDOW = 10 * 60      # 10 min
+COOLDOWN     = 2 * 60 * 60  # 2 h
+
+if not RSS_URL:
+    print("❌ RSS_URL must be set (env or .env).")
     sys.exit(1)
 
-# ─── ENSURE LOG DIRECTORY ──────────────────────────────────
-log_path = Path(LOG_FILE)
-if log_path.parent and not log_path.parent.exists():
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-# ─── SETUP LOGGING ─────────────────────────────────────────
-logger = logging.getLogger()
+# ─── LOGGING ───────────────────────────────────────────────
+Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger("ratiotest")
 logger.setLevel(logging.INFO)
+fmt = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
 
-file_handler = logging.FileHandler(LOG_FILE)
-file_handler.setLevel(logging.INFO)
-file_formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
-file_handler.setFormatter(file_formatter)
-logger.addHandler(file_handler)
+fh = logging.FileHandler(LOG_FILE)
+fh.setFormatter(fmt)
+logger.addHandler(fh)
 
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setLevel(logging.INFO)
-stream_formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
-stream_handler.setFormatter(stream_formatter)
-logger.addHandler(stream_handler)
+sh = logging.StreamHandler(sys.stdout)
+sh.setFormatter(fmt)
+logger.addHandler(sh)
 
-# ─── STATE HANDLING ────────────────────────────────────────
-def load_state(path):
-    if Path(path).is_file():
-        try:
-            return json.loads(Path(path).read_text())
-        except json.JSONDecodeError:
-            pass
-    return {"last_guid": None}
+# ─── STATE HELPERS ─────────────────────────────────────────
+DEFAULT_STATE: Dict[str, Any] = {"last_guid": None, "last_dl_ts": 0}
 
-def save_state(path, state):
+def load_state(path: str) -> Dict[str, Any]:
+    try:
+        return {**DEFAULT_STATE, **json.loads(Path(path).read_text())}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return DEFAULT_STATE.copy()
+
+def save_state(path: str, state: Dict[str, Any]):
     Path(path).write_text(json.dumps(state, indent=2))
 
-# ─── RSS & SIMULATION LOGIC ───────────────────────────────
+# ─── UTILS ─────────────────────────────────────────────────
+
+def get_torrent_url(entry) -> Optional[str]:
+    for enc in entry.get("enclosures", []):
+        href = enc.get("href")
+        if href and href.endswith(".torrent"):
+            return href
+    for link in entry.get("links", []):
+        if link.get("type") in ("application/x-bittorrent", "application/octet-stream"):
+            return link.get("href")
+    link = entry.get("link")
+    return link if link and link.endswith(".torrent") else None
+
+
+def get_entry_age_sec(entry) -> Optional[int]:
+    """Return age in seconds by converting struct_time to UTC epoch."""
+    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not parsed:
+        return None
+    # feedparser normalises parsed struct_time to UTC already → use calendar.timegm
+    entry_ts = calendar.timegm(parsed)
+    return int(time.time() - entry_ts)
+
+# ─── CORE LOGIC ────────────────────────────────────────────
+
 def run_once():
     state = load_state(STATE_FILE)
-    last_guid = state.get("last_guid")
+    last_guid = state["last_guid"]
+    last_dl_ts = state["last_dl_ts"]
+    now = int(time.time())
+
+    # Rule 3: cooldown first
+    if now - last_dl_ts < COOLDOWN:
+        remaining = (COOLDOWN - (now - last_dl_ts)) // 60
+        logger.info(f"Rule‑3 cooldown active ({remaining} min left) → skip")
+        return
 
     feed = feedparser.parse(RSS_URL)
     if not feed.entries:
         logger.warning("RSS feed empty or unreachable")
         return
 
-    # Only consider the newest entry
     entry = feed.entries[0]
     guid = entry.get("id") or entry.get("guid") or entry.get("link")
 
+    # Rule 1: duplicate check
     if guid == last_guid:
-        logger.info(f"No new torrents since last GUID: {last_guid}")
+        logger.info("Rule‑1 newest GUID already processed → skip")
         return
 
-    # extract torrent URL
-    def get_torrent_url(e):
-        for enc in e.get("enclosures", []):
-            href = enc.get("href")
-            if href and href.endswith(".torrent"):
-                return href
-        for link in e.get("links", []):
-            if link.get("type") in ("application/x-bittorrent", "application/octet-stream"):
-                return link.get("href")
-        url = e.get("link")
-        if url and url.endswith(".torrent"):
-            return url
-        return None
+    # Rule 2: freshness
+    age_sec = get_entry_age_sec(entry)
+    if age_sec is None or age_sec > FRESH_WINDOW:
+        logger.info(f"Rule‑2: Torrent age is {age_sec/60:.1f} min > 10 min → skip")
+        return
 
     torrent_url = get_torrent_url(entry)
     if not torrent_url:
-        logger.error("Could not find a .torrent URL in the latest RSS entry")
+        logger.error("Failed to extract .torrent URL → skip")
         return
 
-    logger.info(f"[SIMULATION] Found new torrent: {entry.title}")
-    logger.info(f"[SIMULATION] Would send to qBittorrent API at {QB_URL}/api/v2/torrents/add with URL: {torrent_url}")
+    # All rules passed – simulate
+    logger.info("All rules passed – would download: %s", entry.get("title", "<no title>"))
+    logger.info("[SIMULATION] Would POST to %s/api/v2/torrents/add with URL: %s", QB_URL, torrent_url)
 
-    # Simulate success and update state
+    # Update state
     state["last_guid"] = guid
+    state["last_dl_ts"] = now
     save_state(STATE_FILE, state)
-    logger.info("[SIMULATION] State updated, no actual download performed")
+    logger.info("State updated → cooldown started (2 h)")
 
 # ─── MAIN LOOP ─────────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info(f"Starting ratiotest: interval {INTERVAL_MIN} min, logging to {LOG_FILE}")
+    logger.info("Starting ratiotest (interval %d min)", INTERVAL_MIN)
     while True:
         try:
             run_once()
-        except Exception as e:
-            logger.exception(f"Unexpected error: {e}")
+        except Exception as exc:
+            logger.exception("Unexpected error: %s", exc)
         time.sleep(INTERVAL_MIN * 60)
