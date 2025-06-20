@@ -1,0 +1,8 @@
+services:
+  ratioking:
+    image: ratioking:v101.0.0
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped

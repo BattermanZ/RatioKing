@@ -1,0 +1,16 @@
+# byte-code & venv
+__pycache__/
+*.py[cod]
+.venv/
+
+# logs & state
+*.log
+*.state.json
+logs/
+
+# editor files
+.vscode/
+.idea/
+
+# env files (keep sample)
+.env

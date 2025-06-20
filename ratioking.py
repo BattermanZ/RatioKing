@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-"""ratioking.py – production downloader
-
-Rules (evaluated in this order):
-1. 🆔 **Duplicate check** – skip if newest GUID already processed.
-2. ⏱️ **Freshness** – skip if newest entry is older than 10 min.
-3. ⏳ **Cooldown** – skip if we downloaded in the last 2 h.
-
-If all rules pass, the script downloads the torrent via qBittorrent API and
-updates `state` with the GUID and the download timestamp.
+"""ratioking.py – production downloader with 3-rule logic.
+Reads download parameters (save path, category, tags, share limits) from the
+environment or .env file so you can tweak them without touching the code.
 """
 import os
 import sys
@@ -35,6 +29,13 @@ RSS_URL      = os.getenv("RSS_URL")
 STATE_FILE   = os.getenv("STATE_FILE", "./ratioking.state.json")
 INTERVAL_MIN = int(os.getenv("INTERVAL_MINUTES", "15"))
 LOG_FILE     = os.getenv("LOG_FILE", "./ratioking.log")
+
+# 🎯 User-tunable download parameters
+SAVE_PATH            = os.getenv("SAVE_PATH", "/mnt/ratioking/avistaz")
+CATEGORY             = os.getenv("CATEGORY", "avistaz")
+TAGS                 = os.getenv("TAGS", "ratioking")
+RATIO_LIMIT          = float(os.getenv("RATIO_LIMIT", "-1"))   # -1 = unlimited
+SEEDING_TIME_LIMIT   = int(os.getenv("SEEDING_TIME_LIMIT", "-1"))  # -1 = unlimited
 
 FRESH_WINDOW = 10 * 60      # 10 min
 COOLDOWN     = 2 * 60 * 60  # 2 h
@@ -110,7 +111,7 @@ def run_once():
     entry = feed.entries[0]
     guid = entry.get("id") or entry.get("guid") or entry.get("link")
 
-    # Rule-1 🆔 Duplicate check
+    # Rule-1 🆔 Duplicate
     if guid == last_guid:
         logger.info("🆔 Latest GUID already processed → skip")
         return
@@ -118,7 +119,7 @@ def run_once():
     # Rule-2 ⏱️ Freshness
     age_sec = get_entry_age_sec(entry)
     if age_sec is None or age_sec > FRESH_WINDOW:
-        logger.info(f"⏱️  Torrent age is {age_sec/60:.1f} min > 10 min → skip")
+        logger.info(f"⏱️ Age {age_sec/60:.1f} min > 10 min → skip")
         return
 
     torrent_url = get_torrent_url(entry)
@@ -127,7 +128,7 @@ def run_once():
         return
 
     # All rules passed – download
-    logger.info("✅ All rules passed – downloading: %s", entry.get("title", "<no title>"))
+    logger.info("✅ Downloading: %s", entry.get("title", "<no title>"))
 
     session = requests.Session()
     login = session.post(
@@ -143,11 +144,11 @@ def run_once():
         f"{QB_URL}/api/v2/torrents/add",
         data={
             "urls": torrent_url,
-            "savepath": "/mnt/ratioking/avistaz",
-            "category": "avistaz",
-            "tags": "ratioking",
-            "ratioLimit": -1,
-            "seedingTimeLimit": -1,
+            "savepath": SAVE_PATH,
+            "category": CATEGORY,
+            "tags": TAGS,
+            "ratioLimit": RATIO_LIMIT,
+            "seedingTimeLimit": SEEDING_TIME_LIMIT,
         },
         headers={"Referer": QB_URL}, timeout=20)
 
