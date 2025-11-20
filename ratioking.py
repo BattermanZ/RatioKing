@@ -135,8 +135,9 @@ def run_once():
         f"{QB_URL}/api/v2/auth/login",
         data={"username": QB_USER, "password": QB_PASS},
         headers={"Referer": QB_URL}, timeout=10)
-    if login.status_code != 200 or login.text.strip() != "Ok.":
-        logger.error("❌ qBittorrent login failed (%s)", login.status_code)
+    login_body = login.text.strip()
+    if login.status_code != 200 or login_body != "Ok.":
+        logger.error("❌ qBittorrent login failed – status %s body %r", login.status_code, login_body)
         return
     logger.info("🔑 Authenticated to qBittorrent")
 
@@ -152,14 +153,15 @@ def run_once():
         },
         headers={"Referer": QB_URL}, timeout=20)
 
-    if add.status_code == 200:
+    add_body = (add.text or "").strip()
+    if add.status_code == 200 and add_body in ("Ok.", "Ok"):
         logger.info("📥 Torrent added successfully!")
         state["last_guid"] = guid
         state["last_dl_ts"] = now
         save_state(STATE_FILE, state)
         logger.info("💾 State saved – cooldown started (2 h)")
     else:
-        logger.error("❌ Failed to add torrent (%s)", add.status_code)
+        logger.error("❌ Failed to add torrent – status %s body %r", add.status_code, add_body)
 
 # ─── ENTRY POINT ──────────────────────────────────────────
 if __name__ == "__main__":

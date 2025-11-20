@@ -3,3 +3,4 @@
 *.state.json
 *.log
 /logs
+/__pycache__
