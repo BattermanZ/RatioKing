@@ -30,6 +30,7 @@
   1. ✅ Skip if the torrent GUID was already processed.
   2. ⏱️ Skip if the torrent is older than 10 minutes.
   3. ⏳ Skip if a download occurred too recently (cooldown derived from torrent size ÷ configured download speed, fallback 2 h).
+* Optional Telegram notification when a torrent is added.
 * Downloads new torrents via the qBittorrent WebAPI with custom parameters (save path, category, tags, share ratio, seeding time).
 * Logs actions and reasons for skips with emojis for clarity.
 * Persists state in a JSON file (last GUID and timestamp).
@@ -94,6 +95,8 @@ INTERVAL_MINUTES=5
 LOG_FILE=./logs/ratioking.log
 # STATE_FILE=./ratioking.state.json   # optional custom path
 DOWNLOAD_SPEED_MBPS=10               # Size / speed = cooldown duration
+TELEGRAM_BOT_TOKEN=                  # Optional: send alerts via Telegram
+TELEGRAM_CHAT_ID=                    # Optional: recipient chat ID
 
 # Download parameters
 SAVE_PATH=/mnt/path/

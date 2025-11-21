@@ -7,7 +7,8 @@ FROM python:3.13.5-alpine3.22 AS build
 
 # No .pyc clutter, unbuffered output
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TZ=Europe/Amsterdam
 
 WORKDIR /app
 

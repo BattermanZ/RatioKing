@@ -10,6 +10,7 @@ import time
 import logging
 import calendar
 import math
+import html
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -31,6 +32,8 @@ STATE_FILE   = os.getenv("STATE_FILE", "./ratioking.state.json")
 INTERVAL_MIN = int(os.getenv("INTERVAL_MINUTES", "15"))
 LOG_FILE     = os.getenv("LOG_FILE", "./ratioking.log")
 DOWNLOAD_SPEED_MBPS = float(os.getenv("DOWNLOAD_SPEED_MBPS", "10"))
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 
 # 🎯 User-tunable download parameters
 SAVE_PATH            = os.getenv("SAVE_PATH", "/mnt/ratioking/avistaz")
@@ -97,6 +100,32 @@ def calculate_cooldown_seconds(entry) -> int:
         seconds = math.ceil(size_bytes / SPEED_BYTES_PER_SEC)
         return max(seconds, 0)
     return DEFAULT_COOLDOWN
+
+
+def human_bytes(num: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    size = float(num)
+    for unit in units:
+        if abs(size) < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{size:.2f} EB"
+
+
+def notify_telegram(message: str):
+    """Send a Telegram message if credentials are configured."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning("⚠️ Telegram notify failed – status %s body %r", resp.status_code, resp.text)
+    except Exception as exc:
+        logger.warning("⚠️ Telegram notify raised %s", exc)
 
 def get_torrent_url(entry) -> Optional[str]:
     for enc in entry.get("enclosures", []):
@@ -195,6 +224,10 @@ def run_once():
             size_gb = size_bytes / (1024 ** 3)
             logger.info("💾 State saved – cooldown %.1f min for %.2f GB @ %.2f MB/s",
                         cooldown_minutes, size_gb, DOWNLOAD_SPEED_MBPS)
+        size_bytes_msg = extract_torrent_size(entry)
+        size_text = human_bytes(size_bytes_msg) if size_bytes_msg else "unknown size"
+        title = html.escape(entry.get("title", "<no title>"))
+        notify_telegram(f"<b>📥 Added torrent</b>\n\n{title}\n\nSize: {size_text}")
     else:
         logger.error("❌ Failed to add torrent – status %s body %r", add.status_code, add_body)
 
