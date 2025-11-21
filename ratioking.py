@@ -9,6 +9,7 @@ import json
 import time
 import logging
 import calendar
+import math
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -29,6 +30,7 @@ RSS_URL      = os.getenv("RSS_URL")
 STATE_FILE   = os.getenv("STATE_FILE", "./ratioking.state.json")
 INTERVAL_MIN = int(os.getenv("INTERVAL_MINUTES", "15"))
 LOG_FILE     = os.getenv("LOG_FILE", "./ratioking.log")
+DOWNLOAD_SPEED_MBPS = float(os.getenv("DOWNLOAD_SPEED_MBPS", "10"))
 
 # 🎯 User-tunable download parameters
 SAVE_PATH            = os.getenv("SAVE_PATH", "/mnt/ratioking/avistaz")
@@ -38,7 +40,8 @@ RATIO_LIMIT          = float(os.getenv("RATIO_LIMIT", "-1"))   # -1 = unlimited
 SEEDING_TIME_LIMIT   = int(os.getenv("SEEDING_TIME_LIMIT", "-1"))  # -1 = unlimited
 
 FRESH_WINDOW = 10 * 60      # 10 min
-COOLDOWN     = 2 * 60 * 60  # 2 h
+DEFAULT_COOLDOWN = 2 * 60 * 60  # 2 h fallback
+SPEED_BYTES_PER_SEC = max(DOWNLOAD_SPEED_MBPS, 0) * 1024 * 1024
 
 if not RSS_URL:
     print("❌ RSS_URL must be set (env or .env).")
@@ -59,7 +62,7 @@ sh.setFormatter(fmt)
 logger.addHandler(sh)
 
 # ─── STATE ─────────────────────────────────────────────────
-DEFAULT_STATE: Dict[str, Any] = {"last_guid": None, "last_dl_ts": 0}
+DEFAULT_STATE: Dict[str, Any] = {"last_guid": None, "last_dl_ts": 0, "cooldown_until": 0}
 
 def load_state(path: str) -> Dict[str, Any]:
     try:
@@ -72,6 +75,28 @@ def save_state(path: str, state: Dict[str, Any]):
     Path(path).write_text(json.dumps(state, indent=2))
 
 # ─── HELPERS ───────────────────────────────────────────────
+def extract_torrent_size(entry) -> Optional[int]:
+    """Return content size in bytes, if present in feed entry."""
+    candidates = [
+        entry.get("contentlength"),
+        entry.get("torrent", {}).get("contentlength") if entry.get("torrent") else None,
+    ]
+    for raw in candidates:
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def calculate_cooldown_seconds(entry) -> int:
+    size_bytes = extract_torrent_size(entry)
+    if size_bytes and SPEED_BYTES_PER_SEC > 0:
+        seconds = math.ceil(size_bytes / SPEED_BYTES_PER_SEC)
+        return max(seconds, 0)
+    return DEFAULT_COOLDOWN
 
 def get_torrent_url(entry) -> Optional[str]:
     for enc in entry.get("enclosures", []):
@@ -95,11 +120,12 @@ def run_once():
     state = load_state(STATE_FILE)
     last_guid = state["last_guid"]
     last_dl_ts = state["last_dl_ts"]
+    cooldown_until = state.get("cooldown_until", last_dl_ts + DEFAULT_COOLDOWN)
     now = int(time.time())
 
     # Rule-3 ⏳ Cooldown
-    if now - last_dl_ts < COOLDOWN:
-        remaining = (COOLDOWN - (now - last_dl_ts)) // 60
+    if now < cooldown_until:
+        remaining = (cooldown_until - now) // 60
         logger.info(f"⏳ Cooldown active – {remaining} min left → skip")
         return
 
@@ -156,10 +182,19 @@ def run_once():
     add_body = (add.text or "").strip()
     if add.status_code == 200 and add_body in ("Ok.", "Ok"):
         logger.info("📥 Torrent added successfully!")
+        cooldown_seconds = calculate_cooldown_seconds(entry)
+        cooldown_minutes = cooldown_seconds / 60
         state["last_guid"] = guid
         state["last_dl_ts"] = now
+        state["cooldown_until"] = now + cooldown_seconds
         save_state(STATE_FILE, state)
-        logger.info("💾 State saved – cooldown started (2 h)")
+        if cooldown_seconds == DEFAULT_COOLDOWN:
+            logger.info("💾 State saved – fallback cooldown %.1f min", DEFAULT_COOLDOWN / 60)
+        else:
+            size_bytes = extract_torrent_size(entry) or 0
+            size_gb = size_bytes / (1024 ** 3)
+            logger.info("💾 State saved – cooldown %.1f min for %.2f GB @ %.2f MB/s",
+                        cooldown_minutes, size_gb, DOWNLOAD_SPEED_MBPS)
     else:
         logger.error("❌ Failed to add torrent – status %s body %r", add.status_code, add_body)
 

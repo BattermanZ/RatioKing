@@ -29,7 +29,7 @@
 
   1. ✅ Skip if the torrent GUID was already processed.
   2. ⏱️ Skip if the torrent is older than 10 minutes.
-  3. ⏳ Skip if a download occurred within the last 2 hours.
+  3. ⏳ Skip if a download occurred too recently (cooldown derived from torrent size ÷ configured download speed, fallback 2 h).
 * Downloads new torrents via the qBittorrent WebAPI with custom parameters (save path, category, tags, share ratio, seeding time).
 * Logs actions and reasons for skips with emojis for clarity.
 * Persists state in a JSON file (last GUID and timestamp).
@@ -41,17 +41,17 @@
 ## Architecture
 
 ```
-+--------------+           +-----------------+            +------------+
-|              |   HTTP    |                 |   qBittorrent API  |            |
-|  ratioking   | --------> | qBittorrent Web | <-------------- | qBittorrent |
-|   script     |           |     API         |            |  daemon    |
-|   (Python)   |           |                 |            |            |
-+--------------+           +-----------------+            +------------+
-        ^                                                   /
-        |                                                  /
-        | cron / loop                                     RSS
-        v                                                /
-    state.json  <----  RSS Feed XML  <-------------------
++--------------+           +-----------------+                    +-------------+
+|              |   HTTP    |                 |   qBittorrent API  |             |
+|  ratioking   | --------> | qBittorrent Web | <----------------- | qBittorrent |
+|   script     |           |     API         |                    |   daemon    |
+|   (Python)   |           |                 |                    |             |
++--------------+           +-----------------+                    +-------------+
+        ^                                                         /
+        |                                                        /
+        | cron / loop                                          RSS
+        v                                                      /
+    state.json  <----  RSS Feed XML  <------------------------
 ```
 
 1. The script runs in a loop (every X minutes).
@@ -93,6 +93,7 @@ RSS_URL=https://url.com
 INTERVAL_MINUTES=5
 LOG_FILE=./logs/ratioking.log
 # STATE_FILE=./ratioking.state.json   # optional custom path
+DOWNLOAD_SPEED_MBPS=10               # Size / speed = cooldown duration
 
 # Download parameters
 SAVE_PATH=/mnt/path/
