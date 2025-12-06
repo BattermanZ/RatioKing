@@ -11,6 +11,7 @@ import logging
 import calendar
 import math
 import html
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -130,13 +131,13 @@ def notify_telegram(message: str):
 def get_torrent_url(entry) -> Optional[str]:
     for enc in entry.get("enclosures", []):
         href = enc.get("href")
-        if href and href.endswith(".torrent"):
+        if href and ".torrent" in urlparse(href).path:
             return href
     for link in entry.get("links", []):
         if link.get("type") in ("application/x-bittorrent", "application/octet-stream"):
             return link.get("href")
     link = entry.get("link")
-    return link if link and link.endswith(".torrent") else None
+    return link if link and ".torrent" in urlparse(link).path else None
 
 
 def get_entry_age_sec(entry) -> Optional[int]:
