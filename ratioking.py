@@ -113,6 +113,72 @@ def human_bytes(num: int) -> str:
     return f"{size:.2f} EB"
 
 
+def bdecode(data: bytes, idx: int = 0):
+    """Minimal bencode decoder for .torrent metadata."""
+    token = data[idx:idx+1]
+    if not token:
+        raise ValueError("unexpected end of data")
+    if token == b"i":
+        end = data.index(b"e", idx)
+        return int(data[idx+1:end]), end + 1
+    if token == b"l":
+        idx += 1
+        out = []
+        while data[idx:idx+1] != b"e":
+            val, idx = bdecode(data, idx)
+            out.append(val)
+        return out, idx + 1
+    if token == b"d":
+        idx += 1
+        out = {}
+        while data[idx:idx+1] != b"e":
+            key, idx = bdecode(data, idx)
+            val, idx = bdecode(data, idx)
+            out[key] = val
+        return out, idx + 1
+    if token.isdigit():
+        colon = data.index(b":", idx)
+        length = int(data[idx:colon])
+        start = colon + 1
+        end = start + length
+        return data[start:end], end
+    raise ValueError(f"unexpected token at {idx}: {token!r}")
+
+
+def parse_torrent_size(torrent_bytes: bytes) -> Optional[int]:
+    try:
+        decoded, _ = bdecode(torrent_bytes, 0)
+    except Exception:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    info = decoded.get(b"info")
+    if not isinstance(info, dict):
+        return None
+    if b"length" in info and isinstance(info[b"length"], int):
+        return info[b"length"]
+    files = info.get(b"files")
+    if isinstance(files, list):
+        total = 0
+        for f in files:
+            if isinstance(f, dict) and isinstance(f.get(b"length"), int):
+                total += f[b"length"]
+        return total if total > 0 else None
+    return None
+
+
+def download_torrent(url: str) -> Optional[bytes]:
+    try:
+        resp = requests.get(url, timeout=30)
+    except Exception as exc:
+        logger.warning("⚠️ Failed to fetch torrent (%s)", exc)
+        return None
+    if resp.status_code != 200:
+        logger.warning("⚠️ Torrent fetch status %s", resp.status_code)
+        return None
+    return resp.content
+
+
 def notify_telegram(message: str):
     """Send a Telegram message if credentials are configured."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -183,6 +249,14 @@ def run_once():
         logger.error("❌ .torrent URL not found → skip")
         return
 
+    torrent_bytes = download_torrent(torrent_url)
+    if not torrent_bytes:
+        logger.warning("⚠️ Could not prefetch .torrent; proceeding without size info")
+
+    torrent_size_bytes = extract_torrent_size(entry)
+    if torrent_size_bytes is None and torrent_bytes:
+        torrent_size_bytes = parse_torrent_size(torrent_bytes)
+
     # All rules passed – download
     logger.info("✅ Downloading: %s", entry.get("title", "<no title>"))
 
@@ -197,22 +271,33 @@ def run_once():
         return
     logger.info("🔑 Authenticated to qBittorrent")
 
+    data = {
+        "savepath": SAVE_PATH,
+        "category": CATEGORY,
+        "tags": TAGS,
+        "ratioLimit": RATIO_LIMIT,
+        "seedingTimeLimit": SEEDING_TIME_LIMIT,
+    }
+    files = None
+    if torrent_bytes:
+        files = {"torrents": ("latest.torrent", torrent_bytes)}
+    else:
+        data["urls"] = torrent_url
+
     add = session.post(
         f"{QB_URL}/api/v2/torrents/add",
-        data={
-            "urls": torrent_url,
-            "savepath": SAVE_PATH,
-            "category": CATEGORY,
-            "tags": TAGS,
-            "ratioLimit": RATIO_LIMIT,
-            "seedingTimeLimit": SEEDING_TIME_LIMIT,
-        },
+        data=data,
+        files=files,
         headers={"Referer": QB_URL}, timeout=20)
 
     add_body = (add.text or "").strip()
     if add.status_code == 200 and add_body in ("Ok.", "Ok"):
         logger.info("📥 Torrent added successfully!")
-        cooldown_seconds = calculate_cooldown_seconds(entry)
+        size_for_cooldown = torrent_size_bytes or extract_torrent_size(entry)
+        if size_for_cooldown and SPEED_BYTES_PER_SEC > 0:
+            cooldown_seconds = math.ceil(size_for_cooldown / SPEED_BYTES_PER_SEC)
+        else:
+            cooldown_seconds = DEFAULT_COOLDOWN
         cooldown_minutes = cooldown_seconds / 60
         state["last_guid"] = guid
         state["last_dl_ts"] = now
@@ -221,11 +306,13 @@ def run_once():
         if cooldown_seconds == DEFAULT_COOLDOWN:
             logger.info("💾 State saved – fallback cooldown %.1f min", DEFAULT_COOLDOWN / 60)
         else:
-            size_bytes = extract_torrent_size(entry) or 0
+            size_bytes = size_for_cooldown or 0
             size_gb = size_bytes / (1024 ** 3)
             logger.info("💾 State saved – cooldown %.1f min for %.2f GB @ %.2f MB/s",
                         cooldown_minutes, size_gb, DOWNLOAD_SPEED_MBPS)
         size_bytes_msg = extract_torrent_size(entry)
+        if not size_bytes_msg:
+            size_bytes_msg = torrent_size_bytes
         size_text = human_bytes(size_bytes_msg) if size_bytes_msg else "unknown size"
         title = html.escape(entry.get("title", "<no title>"))
         notify_telegram(f"<b>📥 Added torrent</b>\n\n{title}\n\nSize: {size_text}")
