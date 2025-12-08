@@ -315,7 +315,13 @@ def run_once():
             size_bytes_msg = torrent_size_bytes
         size_text = human_bytes(size_bytes_msg) if size_bytes_msg else "unknown size"
         title = html.escape(entry.get("title", "<no title>"))
-        notify_telegram(f"<b>📥 Added torrent</b>\n\n{title}\n\nSize: {size_text}")
+        notify_telegram(
+            f"<b>📥 Added torrent</b>\n\n"
+            f"{title}\n\n"
+            f"Size: {size_text}\n"
+            f"Cooldown: {cooldown_minutes:.1f} min\n"
+            f"Ends: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now + cooldown_seconds))}"
+        )
     else:
         logger.error("❌ Failed to add torrent – status %s body %r", add.status_code, add_body)
 
