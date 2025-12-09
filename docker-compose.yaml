@@ -1,8 +1,10 @@
 services:
   ratioking:
-    image: ratioking:v101.0.0
+    image: ratioking:latest
     env_file:
       - .env
+    environment:
+      TZ: Europe/Amsterdam
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped

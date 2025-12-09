@@ -35,6 +35,9 @@ LOG_FILE     = os.getenv("LOG_FILE", "./ratioking.log")
 DOWNLOAD_SPEED_MBPS = float(os.getenv("DOWNLOAD_SPEED_MBPS", "10"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "20"))
+MAX_TORRENT_BYTES = int(os.getenv("MAX_TORRENT_BYTES", str(15 * 1024 * 1024)))
+USER_AGENT = os.getenv("USER_AGENT", "ratioking/1.0")
 
 # 🎯 User-tunable download parameters
 SAVE_PATH            = os.getenv("SAVE_PATH", "/mnt/ratioking/avistaz")
@@ -65,6 +68,9 @@ sh = logging.StreamHandler(sys.stdout)
 sh.setFormatter(fmt)
 logger.addHandler(sh)
 
+HTTP_SESSION = requests.Session()
+HTTP_SESSION.headers.update({"User-Agent": USER_AGENT})
+
 # ─── STATE ─────────────────────────────────────────────────
 DEFAULT_STATE: Dict[str, Any] = {"last_guid": None, "last_dl_ts": 0, "cooldown_until": 0}
 
@@ -72,11 +78,18 @@ def load_state(path: str) -> Dict[str, Any]:
     try:
         data = json.loads(Path(path).read_text())
         return {**DEFAULT_STATE, **data}
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return DEFAULT_STATE.copy()
+    except json.JSONDecodeError as exc:
+        logger.warning("⚠️ State file corrupt (%s); resetting to defaults", exc)
         return DEFAULT_STATE.copy()
 
 def save_state(path: str, state: Dict[str, Any]):
-    Path(path).write_text(json.dumps(state, indent=2))
+    target = Path(path)
+    payload = json.dumps(state, indent=2)
+    tmp = target.with_suffix(f"{target.suffix}.tmp")
+    tmp.write_text(payload)
+    tmp.replace(target)
 
 # ─── HELPERS ───────────────────────────────────────────────
 def extract_torrent_size(entry) -> Optional[int]:
@@ -169,14 +182,23 @@ def parse_torrent_size(torrent_bytes: bytes) -> Optional[int]:
 
 def download_torrent(url: str) -> Optional[bytes]:
     try:
-        resp = requests.get(url, timeout=30)
+        with HTTP_SESSION.get(url, timeout=HTTP_TIMEOUT, stream=True) as resp:
+            if resp.status_code != 200:
+                logger.warning("⚠️ Torrent fetch status %s", resp.status_code)
+                return None
+
+            data = bytearray()
+            for chunk in resp.iter_content(chunk_size=10240):
+                if not chunk:
+                    continue
+                data.extend(chunk)
+                if len(data) > MAX_TORRENT_BYTES:
+                    logger.warning("⚠️ Torrent exceeds max size %d bytes; aborting fetch", MAX_TORRENT_BYTES)
+                    return None
+            return bytes(data)
     except Exception as exc:
         logger.warning("⚠️ Failed to fetch torrent (%s)", exc)
         return None
-    if resp.status_code != 200:
-        logger.warning("⚠️ Torrent fetch status %s", resp.status_code)
-        return None
-    return resp.content
 
 
 def notify_telegram(message: str):
@@ -194,16 +216,34 @@ def notify_telegram(message: str):
     except Exception as exc:
         logger.warning("⚠️ Telegram notify raised %s", exc)
 
+def fetch_feed(url: str):
+    try:
+        resp = HTTP_SESSION.get(url, timeout=HTTP_TIMEOUT)
+    except Exception as exc:
+        logger.warning("⚠️ Failed to fetch RSS feed (%s)", exc)
+        return None
+    if resp.status_code != 200:
+        logger.warning("⚠️ RSS fetch status %s", resp.status_code)
+        return None
+    feed = feedparser.parse(resp.content)
+    if getattr(feed, "bozo", False):
+        logger.warning("⚠️ RSS parse issue: %s", getattr(feed, "bozo_exception", "unknown"))
+    return feed
+
+def _is_allowed_scheme(url: str) -> bool:
+    return urlparse(url).scheme in {"http", "https"}
+
 def get_torrent_url(entry) -> Optional[str]:
     for enc in entry.get("enclosures", []):
         href = enc.get("href")
-        if href and ".torrent" in urlparse(href).path:
+        if href and ".torrent" in urlparse(href).path and _is_allowed_scheme(href):
             return href
     for link in entry.get("links", []):
-        if link.get("type") in ("application/x-bittorrent", "application/octet-stream"):
-            return link.get("href")
+        href = link.get("href")
+        if href and link.get("type") in ("application/x-bittorrent", "application/octet-stream") and _is_allowed_scheme(href):
+            return href
     link = entry.get("link")
-    return link if link and ".torrent" in urlparse(link).path else None
+    return link if link and ".torrent" in urlparse(link).path and _is_allowed_scheme(link) else None
 
 
 def get_entry_age_sec(entry) -> Optional[int]:
@@ -225,8 +265,8 @@ def run_once():
         logger.info(f"⏳ Cooldown active – {remaining} min left → skip")
         return
 
-    feed = feedparser.parse(RSS_URL)
-    if not feed.entries:
+    feed = fetch_feed(RSS_URL)
+    if not feed or not feed.entries:
         logger.warning("⚠️ RSS feed empty or unreachable")
         return
 
@@ -240,8 +280,11 @@ def run_once():
 
     # Rule-2 ⏱️ Freshness
     age_sec = get_entry_age_sec(entry)
-    if age_sec is None or age_sec > FRESH_WINDOW:
-        logger.info(f"⏱️ Age {age_sec/60:.1f} min > 10 min → skip")
+    if age_sec is None:
+        logger.info("⏱️ Entry age unknown → skip")
+        return
+    if age_sec > FRESH_WINDOW:
+        logger.info("⏱️ Age %.1f min > %.1f min → skip", age_sec / 60, FRESH_WINDOW / 60)
         return
 
     torrent_url = get_torrent_url(entry)

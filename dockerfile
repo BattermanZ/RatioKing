@@ -25,13 +25,15 @@ RUN pip install --upgrade pip \
 FROM python:3.13.5-alpine3.22
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TZ=UTC
 
 WORKDIR /app
 
 # Install only prebuilt wheels (no compilers needed)
 COPY --from=build /wheels /wheels
-RUN pip install --no-cache-dir --no-index --find-links /wheels \
+RUN apk add --no-cache tzdata \
+ && pip install --no-cache-dir --no-index --find-links /wheels \
         feedparser requests python-dotenv
 
 # Copy application code
