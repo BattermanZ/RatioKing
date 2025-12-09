@@ -2,6 +2,8 @@
 
 **Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage Alpine Docker image.
 
+Disclaimer: this tool was vibe-coded originally, then hardened for production. It only makes outbound calls (RSS + qBittorrent WebAPI) and does not require any open inbound ports.
+
 ---
 
 ## Table of Contents
@@ -27,12 +29,14 @@
 * Polls a torrent RSS feed at configurable intervals.
 * Applies three rules before downloading:
 
-  1. ✅ Skip if the torrent GUID was already processed.
-  2. ⏱️ Skip if the torrent is older than 10 minutes.
-  3. ⏳ Skip if a download occurred too recently (cooldown derived from torrent size ÷ configured download speed, fallback 2 h).
+  1. Skip if the torrent GUID was already processed.
+  2. Skip if the torrent is older than 10 minutes for maximum freshness and opportunity to seed.
+  3. Skip if a download occurred too recently (cooldown derived from torrent size ÷ configured download speed, fallback 2 h).
+
+  The cooldown enforces **one torrent at a time** so the available bandwidth goes to seeding what you just grabbed, improving ratio performance.
 * Optional Telegram notification when a torrent is added.
 * Downloads new torrents via the qBittorrent WebAPI with custom parameters (save path, category, tags, share ratio, seeding time).
-* Logs actions and reasons for skips with emojis for clarity.
+* Logs actions and reasons for skips with clear text markers.
 * Persists state in a JSON file (last GUID and timestamp).
 * Configurable entirely via environment variables or a `.env` file.
 * Containerised using a minimal multi-stage Alpine Docker image (\~40 MB).
@@ -41,26 +45,35 @@
 
 ## Architecture
 
-```
-+--------------+           +-----------------+                    +-------------+
-|              |   HTTP    |                 |   qBittorrent API  |             |
-|  ratioking   | --------> | qBittorrent Web | <----------------- | qBittorrent |
-|   script     |           |     API         |                    |   daemon    |
-|   (Python)   |           |                 |                    |             |
-+--------------+           +-----------------+                    +-------------+
-        ^                                                         /
-        |                                                        /
-        | cron / loop                                          RSS
-        v                                                      /
-    state.json  <----  RSS Feed XML  <------------------------
+```mermaid
+flowchart LR
+    subgraph Scheduler
+        loop[Polling loop (INTERVAL_MINUTES)]
+    end
+    subgraph State
+        state[state.json<br/>last_guid, last_dl_ts, cooldown_until]
+    end
+    subgraph Feed
+        rss[RSS feed]
+    end
+    subgraph QB[ qBittorrent ]
+        api[qBittorrent WebAPI]
+        daemon[qBittorrent daemon]
+        api --> daemon
+    end
+
+    loop --> rss
+    rss -->|latest entry| loop
+    loop -->|3-rule check| state
+    loop -->|torrent URL| api
+    api -->|added torrent| loop
 ```
 
-1. The script runs in a loop (every X minutes).
-2. It loads `state.json` to check last download GUID and timestamp.
-3. It fetches the RSS feed, picks the newest entry, and applies the three rules.
+1. The script runs in a loop (every `INTERVAL_MINUTES`).
+2. It loads `state.json` to check last download GUID and cooldown.
+3. It fetches the RSS feed, picks the newest entry, and applies the three rules (duplicate, freshness, cooldown).
 4. If all pass, it calls the qBittorrent WebAPI to add the torrent with configured options.
-5. It updates `state.json` to record the download.
-6. All actions and skips are logged to stdout and a log file.
+5. It updates `state.json` and logs the actions.
 
 ---
 
@@ -97,6 +110,9 @@ LOG_FILE=./logs/ratioking.log
 DOWNLOAD_SPEED_MBPS=10               # Size / speed = cooldown duration
 TELEGRAM_BOT_TOKEN=                  # Optional: send alerts via Telegram
 TELEGRAM_CHAT_ID=                    # Optional: recipient chat ID
+# HTTP_TIMEOUT=20                    # Seconds; applies to RSS and torrent fetches
+# MAX_TORRENT_BYTES=15728640         # Safety cap for torrent file prefetch
+# USER_AGENT=ratioking/1.0           # Override if your feed requires it
 
 # Download parameters
 SAVE_PATH=/mnt/path/
@@ -161,7 +177,7 @@ Logs appear on stdout and in `LOG_FILE`. Press `Ctrl+C` to stop.
 ### Building the Image
 
 ```bash
-docker build -t ratioking:v101.0.0 .
+docker build -t ratioking:latest .
 ```
 
 ### docker-compose
@@ -169,21 +185,16 @@ docker build -t ratioking:v101.0.0 .
 Use the provided `docker-compose.yml`:
 
 ```yaml
-version: "3.8"
 services:
   ratioking:
-    image: ratioking:v101.0.0
+    image: ratioking:latest
     env_file:
       - .env
+    environment:
+      TZ: Europe/Paris   # override container timezone without touching .env
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
-    networks:
-      - docker_default
-
-networks:
-  docker_default:
-    external: true
 ```
 
 Launch:
@@ -203,6 +214,8 @@ docker-compose up -d
   { "last_guid": "<torrent GUID>", "last_dl_ts": 168XYZ }
   ```
 
+* **Cooldown:** derived from torrent size ÷ `DOWNLOAD_SPEED_MBPS` (fallback 2 h) to ensure only one torrent downloads at a time and the link is freed quickly for seeding.
+
 ---
 
 ## Customization
@@ -215,11 +228,11 @@ docker-compose up -d
 
 ## Troubleshooting
 
-* **Skipping too much?** Check logs for which rule is firing (🆔, ⏱️, ⏳).
+* **Skipping too much?** Check logs for which rule is firing (duplicate, freshness, cooldown).
 * **API errors?** Validate credentials & test `curl` against `QB_URL`.
 * **Feed issues?** Run `rss_debug.py` to inspect feed structure.
 * **Docker build fails?** Ensure `requirements.txt` is up to date.
 
 ---
 
-Enjoy your automated downloads! 📥🚀
+Enjoy your automated downloads.
