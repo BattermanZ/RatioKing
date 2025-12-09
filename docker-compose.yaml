@@ -5,6 +5,8 @@ services:
       - .env
     environment:
       TZ: Europe/Amsterdam
+      STATE_FILE: /app/data/ratioking.state.json
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data     # persists cooldown/last GUID across restarts
     restart: unless-stopped
