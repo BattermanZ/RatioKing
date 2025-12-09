@@ -47,26 +47,22 @@ Disclaimer: this tool was vibe-coded originally, then hardened for production. I
 
 ```mermaid
 flowchart LR
-    subgraph Scheduler
-        loop[Polling loop (INTERVAL_MINUTES)]
-    end
-    subgraph State
-        state[state.json<br/>last_guid, last_dl_ts, cooldown_until]
-    end
-    subgraph Feed
-        rss[RSS feed]
-    end
-    subgraph QB[ qBittorrent ]
-        api[qBittorrent WebAPI]
-        daemon[qBittorrent daemon]
-        api --> daemon
-    end
+    loop[Polling loop every INTERVAL_MINUTES]
+    rss[(RSS feed)]
+    entry[Newest feed entry]
+    rules{All 3 rules pass?}
+    api[qBittorrent WebAPI]
+    daemon[qBittorrent daemon]
+    state[(state.json<br/>last_guid<br/>last_dl_ts<br/>cooldown_until)]
 
     loop --> rss
-    rss -->|latest entry| loop
-    loop -->|3-rule check| state
-    loop -->|torrent URL| api
-    api -->|added torrent| loop
+    rss --> entry
+    entry --> rules
+    rules -- no --> loop
+    rules -- yes --> api
+    api --> daemon
+    api --> state
+    loop --> state
 ```
 
 1. The script runs in a loop (every `INTERVAL_MINUTES`).
@@ -79,12 +75,12 @@ flowchart LR
 
 ## Requirements
 
-* Python 3.12+
+* Python 3.11+
 * `feedparser` (RSS parsing)
 * `requests` (HTTP client)
 * `python-dotenv` (optional, for `.env` loading)
 
-*On Docker, everything is packaged—no host Python needed.*
+*On Docker, everything is packaged—no host Python needed; the image ships with Python 3.11 distroless.*
 
 ---
 
