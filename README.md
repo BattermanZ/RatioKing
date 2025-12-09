@@ -1,6 +1,6 @@
 # RatioKing
 
-**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage Alpine Docker image.
+**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage distroless Docker image (about 21 MB) for improved security.
 
 Disclaimer: this tool was vibe-coded originally, then hardened for production. It only makes outbound calls (RSS + qBittorrent WebAPI) and does not require any open inbound ports.
 
@@ -39,7 +39,7 @@ Disclaimer: this tool was vibe-coded originally, then hardened for production. I
 * Logs actions and reasons for skips with clear text markers.
 * Persists state in a JSON file (last GUID and timestamp).
 * Configurable entirely via environment variables or a `.env` file.
-* Containerised using a minimal multi-stage Alpine Docker image (\~40 MB).
+* Containerised using a minimal multi-stage distroless Docker image (~21 MB) for a smaller attack surface.
 
 ---
 
@@ -111,7 +111,7 @@ DOWNLOAD_SPEED_MBPS=10               # Size / speed = cooldown duration
 TELEGRAM_BOT_TOKEN=                  # Optional: send alerts via Telegram
 TELEGRAM_CHAT_ID=                    # Optional: recipient chat ID
 # HTTP_TIMEOUT=20                    # Seconds; applies to RSS and torrent fetches
-# MAX_TORRENT_BYTES=15728640         # Safety cap for torrent file prefetch
+# MAX_TORRENT_BYTES=5242880          # Safety cap for torrent file prefetch
 # USER_AGENT=ratioking/1.0           # Override if your feed requires it
 
 # Download parameters
@@ -119,7 +119,7 @@ SAVE_PATH=/mnt/path/
 CATEGORY=category
 TAGS=tags
 RATIO_LIMIT=-1           # -1 = unlimited ratio
-SEEDING_TIME_LIMIT=-1    # -1 = no time limit
+SEEDING_TIME_LIMIT=-1    # Minutes; -1 = no time limit
 ```
 
 Each variable has a sensible default if not set.

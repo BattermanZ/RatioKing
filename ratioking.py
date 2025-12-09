@@ -36,7 +36,7 @@ DOWNLOAD_SPEED_MBPS = float(os.getenv("DOWNLOAD_SPEED_MBPS", "10"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "20"))
-MAX_TORRENT_BYTES = int(os.getenv("MAX_TORRENT_BYTES", str(15 * 1024 * 1024)))
+MAX_TORRENT_BYTES = int(os.getenv("MAX_TORRENT_BYTES", str(5 * 1024 * 1024)))
 USER_AGENT = os.getenv("USER_AGENT", "ratioking/1.0")
 
 # 🎯 User-tunable download parameters
@@ -60,13 +60,21 @@ logger = logging.getLogger("ratioking")
 logger.setLevel(logging.INFO)
 fmt = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
 
-fh = logging.FileHandler(LOG_FILE)
-fh.setFormatter(fmt)
-logger.addHandler(fh)
+handlers = []
+try:
+    fh = logging.FileHandler(LOG_FILE)
+    fh.setFormatter(fmt)
+    handlers.append(fh)
+except Exception as exc:
+    # Keep running even if file logging is unavailable (e.g., permission issues)
+    sys.stderr.write(f"Warning: file logging disabled ({exc})\n")
 
 sh = logging.StreamHandler(sys.stdout)
 sh.setFormatter(fmt)
-logger.addHandler(sh)
+handlers.append(sh)
+
+for h in handlers:
+    logger.addHandler(h)
 
 HTTP_SESSION = requests.Session()
 HTTP_SESSION.headers.update({"User-Agent": USER_AGENT})

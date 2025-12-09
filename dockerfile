@@ -1,46 +1,46 @@
 # syntax=docker/dockerfile:1
 
 #################################
-# Stage 1: build pure-Python wheels
+# Stage 1: build dependencies
 #################################
-FROM python:3.13.5-alpine3.22 AS build
+FROM python:3.11-slim-bookworm AS build
 
-# No .pyc clutter, unbuffered output
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    TZ=Europe/Amsterdam
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Copy dependency list
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 
-# Build wheels into /wheels
+# Vendor dependencies into /opt/ratioking-deps (no pip needed later)
 RUN pip install --upgrade pip \
- && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+ && pip install --no-cache-dir --no-compile --target /opt/ratioking-deps -r requirements.txt
+
+# Keep zoneinfo for TZ support
+COPY ratioking.py .
 
 #################################
-# Stage 2: runtime
+# Stage 2: distroless runtime
 #################################
-FROM python:3.13.5-alpine3.22
+FROM gcr.io/distroless/python3-debian12:nonroot
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TZ=UTC
+    TZ=UTC \
+    PYTHONPATH=/opt/ratioking-deps
 
 WORKDIR /app
 
-# Install only prebuilt wheels (no compilers needed)
-COPY --from=build /wheels /wheels
-RUN apk add --no-cache tzdata \
- && pip install --no-cache-dir --no-index --find-links /wheels \
-        feedparser requests python-dotenv
-
-# Copy application code
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=build /etc/localtime /etc/localtime
+COPY --from=build /opt/ratioking-deps /opt/ratioking-deps
 COPY ratioking.py .
 
-# Validate syntax on startup
-HEALTHCHECK CMD python -m py_compile ratioking.py
+HEALTHCHECK CMD ["/usr/bin/python3", "-m", "py_compile", "/app/ratioking.py"]
 
-# Default command will pick up your host-mounted .env via python-dotenv
-CMD ["python", "ratioking.py"]
+# distroless already sets the entrypoint to python3; pass only the script
+CMD ["/app/ratioking.py"]

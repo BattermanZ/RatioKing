@@ -4,9 +4,12 @@ services:
     env_file:
       - .env
     environment:
-      TZ: Europe/Amsterdam
+      TZ: Europe/Paris
       STATE_FILE: /app/data/ratioking.state.json
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data     # persists cooldown/last GUID across restarts
+    # Run as host user by default to avoid permission issues on bind mounts.
+    # Override via PUID/PGID envs if your host UID/GID differ.
+    user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
