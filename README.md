@@ -58,8 +58,8 @@ flowchart LR
     rules{All 3 rules pass?}
     api[qBittorrent WebAPI]
     daemon[qBittorrent daemon]
-    state[(state.json: last_guid, last_dl_ts, cooldown_until)]
-    telegram[Telegram notify (optional)]
+    state[(state.json<br/>last_guid<br/>last_dl_ts<br/>cooldown_until)]
+    tg[Telegram bot]
 
     loop --> rss
     rss --> entry
@@ -68,8 +68,8 @@ flowchart LR
     rules -- yes --> api
     api --> daemon
     api --> state
+    api --> tg
     loop --> state
-    api --> telegram
 ```
 
 1. The script runs in a loop (every `INTERVAL_MINUTES`).
