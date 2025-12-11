@@ -1,8 +1,10 @@
 # RatioKing
 
-**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage distroless Docker image (about 21 MB) for improved security.
+**I built this app specifically for building up ratio quickly on new private torrent trackers using freeleech torrents** but it can be used for downloading anything via RSS.
 
-Disclaimer: this tool was vibe-coded originally, then hardened for production. It only makes outbound calls (RSS + qBittorrent WebAPI) and does not require any open inbound ports.
+**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage **distroless Docker image** (about 21 MB) for improved security.
+
+> **Disclaimer:** this tool was 100% vibe-coded, then hardened for production. It only makes outbound calls (RSS + qBittorrent WebAPI) and does not require any open inbound ports.
 
 ---
 
@@ -19,14 +21,17 @@ Disclaimer: this tool was vibe-coded originally, then hardened for production. I
   * [Building the Image](#building-the-image)
   * [docker-compose](#docker-compose)
 * [Logging & State](#logging--state)
-* [Customization](#customization)
+* [Security Notes](#security-notes)
+* [Customisation](#customisation)
 * [Troubleshooting](#troubleshooting)
+* [License](#license)
 
 ---
 
 ## Features
 
 * Polls a torrent RSS feed at configurable intervals.
+* Use with a freeleech RSS torrent feed to build your ratio on a new private tracker!
 * Applies three rules before downloading:
 
   1. Skip if the torrent GUID was already processed.
@@ -54,6 +59,7 @@ flowchart LR
     api[qBittorrent WebAPI]
     daemon[qBittorrent daemon]
     state[(state.json<br/>last_guid<br/>last_dl_ts<br/>cooldown_until)]
+    telegram[Telegram notify<br/>(optional)]
 
     loop --> rss
     rss --> entry
@@ -63,6 +69,7 @@ flowchart LR
     api --> daemon
     api --> state
     loop --> state
+    api --> telegram
 ```
 
 1. The script runs in a loop (every `INTERVAL_MINUTES`).
@@ -214,7 +221,19 @@ docker-compose up -d
 
 ---
 
-## Customization
+## Security Notes
+
+* Distroless runtime (Python 3.11) for a minimal attack surface; no shell or package manager in the final image.
+* Non-root container by default (configurable via `PUID`/`PGID` in compose) to align file permissions with host binds.
+* Outbound-only design: talks to RSS and qBittorrent WebAPI; no inbound ports exposed by this service.
+* TLS-capable HTTP client with configurable `HTTP_TIMEOUT` and `MAX_TORRENT_BYTES` to avoid hanging or oversized torrent fetches.
+* Torrent prefetch size cap (default 5 MB) and required http/https schemes for torrent URLs to avoid unsafe protocols.
+* Atomic state writes and resilient state loading to reduce corruption risk.
+* Optional Telegram notifications use HTTPS; they are skipped if not configured.
+
+---
+
+## Customisation
 
 * Change timing constants in code for different intervals.
 * Tweak download options via `.env` without code changes.
@@ -225,10 +244,16 @@ docker-compose up -d
 ## Troubleshooting
 
 * **Skipping too much?** Check logs for which rule is firing (duplicate, freshness, cooldown).
-* **API errors?** Validate credentials & test `curl` against `QB_URL`.
+* **API errors?** Validate credentials and test `curl` against `QB_URL`.
 * **Feed issues?** Run `rss_debug.py` to inspect feed structure.
 * **Docker build fails?** Ensure `requirements.txt` is up to date.
 
 ---
 
 Enjoy your automated downloads.
+
+---
+
+## License
+
+GPL-3.0-or-later. See `LICENSE`.
