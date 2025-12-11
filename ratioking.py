@@ -11,6 +11,8 @@ import logging
 import calendar
 import math
 import html
+import signal
+import threading
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -78,6 +80,7 @@ for h in handlers:
 
 HTTP_SESSION = requests.Session()
 HTTP_SESSION.headers.update({"User-Agent": USER_AGENT})
+STOP_EVENT = threading.Event()
 
 # ─── STATE ─────────────────────────────────────────────────
 DEFAULT_STATE: Dict[str, Any] = {"last_guid": None, "last_dl_ts": 0, "cooldown_until": 0}
@@ -378,10 +381,17 @@ def run_once():
 
 # ─── ENTRY POINT ──────────────────────────────────────────
 if __name__ == "__main__":
+    def _handle_signal(signum, frame):
+        logger.info("Received signal %s – shutting down gracefully", signum)
+        STOP_EVENT.set()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
     logger.info("🚀 Starting ratioking – interval %d min", INTERVAL_MIN)
-    while True:
+    while not STOP_EVENT.is_set():
         try:
             run_once()
         except Exception as exc:
             logger.exception("💥 Unexpected error: %s", exc)
-        time.sleep(INTERVAL_MIN * 60)
+        STOP_EVENT.wait(INTERVAL_MIN * 60)

@@ -185,7 +185,7 @@ docker build -t ratioking:latest .
 
 ### docker-compose
 
-Use the provided `docker-compose.yml`:
+Use the provided `docker-compose.yml` (matching the distroless image and bind mounts):
 
 ```yaml
 services:
@@ -194,9 +194,14 @@ services:
     env_file:
       - .env
     environment:
-      TZ: Europe/Paris   # override container timezone without touching .env
+      TZ: Europe/Amsterdam
+      STATE_FILE: /app/data/ratioking.state.json
+      # Optional: run as host UID/GID to avoid bind-mount permission issues
+      # PUID: "1000"
+      # PGID: "1000"
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data     # persists cooldown/last GUID across restarts
     restart: unless-stopped
 ```
 
