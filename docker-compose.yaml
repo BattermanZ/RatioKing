@@ -1,6 +1,6 @@
 services:
   ratioking:
-    image: ratioking:latest
+    image: battermanz/ratioking:latest
     env_file:
       - .env
     environment:

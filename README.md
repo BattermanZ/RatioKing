@@ -2,7 +2,7 @@
 
 **I built this app specifically for building up ratio quickly on new private torrent trackers using freeleech torrents** but it can be used for downloading anything via RSS.
 
-**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage **distroless Docker image** (about 21 MB) for improved security.
+**Automated RSS‑to‑qBittorrent downloader** with three-rule logic, containerised in a lightweight multi-stage **distroless Docker image** (about 21 MB) for improved security ([Docker hub repo](https://hub.docker.com/r/battermanz/ratioking))
 
 > **Disclaimer:** this tool was 100% vibe-coded, then hardened for production. It only makes outbound calls (RSS + qBittorrent WebAPI) and does not require any open inbound ports.
 
@@ -178,7 +178,7 @@ Logs appear on stdout and in `LOG_FILE`. Press `Ctrl+C` to stop.
 
 ## Docker
 
-### Building the Image
+### (optional) Building the Image
 
 ```bash
 docker build -t ratioking:latest .
@@ -186,12 +186,12 @@ docker build -t ratioking:latest .
 
 ### docker-compose
 
-Use the provided `docker-compose.yml` (matching the distroless image and bind mounts):
+Use the provided `docker-compose.yml` (matching the distroless image and bind mounts, [Docker hub repo](https://hub.docker.com/r/battermanz/ratioking)):
 
 ```yaml
 services:
   ratioking:
-    image: ratioking:latest
+    image: battermanz/ratioking:latest
     env_file:
       - .env
     environment:
