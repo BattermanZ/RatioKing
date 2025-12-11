@@ -58,8 +58,8 @@ flowchart LR
     rules{All 3 rules pass?}
     api[qBittorrent WebAPI]
     daemon[qBittorrent daemon]
-    state[(state.json<br/>last_guid<br/>last_dl_ts<br/>cooldown_until)]
-    telegram[Telegram notify<br/>(optional)]
+    state[(state.json\nlast_guid\nlast_dl_ts\ncooldown_until)]
+    telegram[Telegram notify (optional)]
 
     loop --> rss
     rss --> entry
