@@ -21,6 +21,7 @@
   * [Building the Image](#building-the-image)
   * [docker-compose](#docker-compose)
 * [Logging & State](#logging--state)
+* [Telegram Notifications](#telegram-notifications)
 * [Security Notes](#security-notes)
 * [Customisation](#customisation)
 * [Troubleshooting](#troubleshooting)
@@ -223,6 +224,33 @@ docker-compose up -d
   ```
 
 * **Cooldown:** derived from torrent size ÷ `DOWNLOAD_SPEED_MBPS` (fallback 2 h) to ensure only one torrent downloads at a time and the link is freed quickly for seeding.
+
+---
+
+## Telegram Notifications
+
+* Optional; disabled unless both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set.
+* Configure in `.env` or `docker-compose.yml`:
+
+  ```dotenv
+  TELEGRAM_BOT_TOKEN=123456:ABC...
+  TELEGRAM_CHAT_ID=123456789
+  ```
+
+* Bot setup: create a bot with BotFather, copy the token, and use your chat ID (or the ID of the group the bot is in).
+* The app sends an HTML-formatted message when a torrent is added. Example:
+
+  ```
+  📥 Added torrent
+
+  Natsumes Book of Friends S02 1080p CR WEB-DL Dual-Audio AAC 2 0 x264-Fool
+
+  Size: 1.20 GB
+  Cooldown: 45.0 min
+  Ends: 2025-12-09 16:45:36
+  ```
+
+If credentials are missing or Telegram rejects the call, the downloader continues without notifications.
 
 ---
 
